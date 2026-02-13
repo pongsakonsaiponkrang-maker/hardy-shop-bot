@@ -24,15 +24,15 @@ from google.oauth2.service_account import Credentials
 APP_TZ = timezone(timedelta(hours=7))
 
 # ---------- ENV ----------
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("Uqi0zy7Jfr9zjpHJ/JvQWbv2haoMOtiLuKVGQ5A/N0a4eJcYUhv13HiYe7/mCDRBvuBE6c+7QQp+y8nh7S+plzqQoqIql89MPUMB6WIIyzMAbM50THeq8jBFTl2ma16Kj2AzG7zT7bXNsVxYCe3L/gdB04t89/1O/w1cDnyilFU=", "").strip()
+LINE_CHANNEL_SECRET = os.getenv("703445d5283a57ec4ffc54b18afbb8e1", "").strip()
 
 SHEET_ID = os.getenv("SHEET_ID", "").strip()
-ORDERS_SHEET_NAME = os.getenv("ORDERS_SHEET_NAME", "HARDY_ORDER").strip()
-SESSIONS_SHEET_NAME = os.getenv("SESSIONS_SHEET_NAME", "SESSIONS").strip()
+ORDERS_SHEET_NAME = os.getenv("HARDY_ORDER", "HARDY_ORDER").strip()
+SESSIONS_SHEET_NAME = os.getenv("HARDY_ORDER", "HARDY_ORDER").strip()
 
 # ใส่ JSON ของ service account แบบ "ทั้งก้อน" ใน Render env
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("hardy_bot_.json", "").strip()
 
 # ถ้าต้องการให้แจ้งแอดมินทันทีตอนยืนยันออเดอร์
 ADMIN_USER_ID = os.getenv("ADMIN_USER_ID", "").strip()  # optional
