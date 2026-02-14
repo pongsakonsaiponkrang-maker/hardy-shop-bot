@@ -1,6 +1,6 @@
 # ==========================================================
-# HARDY ORDER FLOW - CLEAN V2 (STABLE)
-# Small Quick Reply / Safe State / Production Ready
+# HARDY ORDER FLOW - V3 PRODUCTION SAFE
+# Strict State / Anti-Skip / Anti-Double Confirm
 # ==========================================================
 
 from typing import List, Tuple
@@ -18,13 +18,8 @@ from services.session_service import (
     clear_session,
 )
 
-# ⚠️ IMPORTANT:
-# ป้องกัน circular import
-# import order/admin service ตอนใช้งานจริงเท่านั้น
-
-
 # ==========================================================
-# QUICK REPLY BUILDER
+# QUICK REPLY
 # ==========================================================
 
 def quick(text: str, buttons: List[Tuple[str, str]]):
@@ -68,6 +63,18 @@ def send_menu(reply_token: str):
 
 
 # ==========================================================
+# SAFE VALIDATION
+# ==========================================================
+
+def require_state(uid, reply_token, expected_state):
+    session = get_session(uid)
+    if session.get("state") != expected_state:
+        send_menu(reply_token)
+        return False
+    return True
+
+
+# ==========================================================
 # MAIN FLOW
 # ==========================================================
 
@@ -77,7 +84,7 @@ def handle(uid: str, reply_token: str, text: str):
     state = session.get("state", "IDLE")
     data = session.get("data", {})
 
-    # ---------------- MENU ----------------
+    # ---------------- MENU RESET ----------------
     if text.lower() in ["เมนู", "menu", "hi", "hello"]:
         clear_session(uid)
         send_menu(reply_token)
@@ -85,8 +92,9 @@ def handle(uid: str, reply_token: str, text: str):
 
     # ---------------- START ORDER ----------------
     if text == "BOT:ORDER":
-        colors = get_available_colors()
+        clear_session(uid)
 
+        colors = get_available_colors()
         if not colors:
             reply_message(reply_token, [{"type": "text", "text": "สินค้าหมด ❌"}])
             return
@@ -97,8 +105,12 @@ def handle(uid: str, reply_token: str, text: str):
         set_session(uid, "WAIT_COLOR", {})
         return
 
-    # ---------------- SELECT COLOR ----------------
+    # ---------------- COLOR ----------------
     if text.startswith("BOT:COLOR:"):
+
+        if not require_state(uid, reply_token, "WAIT_COLOR"):
+            return
+
         parts = text.split(":", 2)
         if len(parts) != 3:
             send_menu(reply_token)
@@ -115,25 +127,30 @@ def handle(uid: str, reply_token: str, text: str):
         for s in sizes:
             price = get_price(color, s)
             stock = get_stock(color, s)
-            label = f"{s} | {price}฿ | {stock}"
-            buttons.append((label, f"BOT:SIZE:{color}:{s}"))
+            buttons.append(
+                (f"{s} | {price}฿ | {stock}", f"BOT:SIZE:{color}:{s}")
+            )
 
-        reply_message(
-            reply_token,
-            [quick(f"สี {color}\nเลือกไซส์:", buttons)],
-        )
-
+        reply_message(reply_token, [quick(f"สี {color}\nเลือกไซส์:", buttons)])
         set_session(uid, "WAIT_SIZE", {"color": color})
         return
 
-    # ---------------- SELECT SIZE ----------------
+    # ---------------- SIZE ----------------
     if text.startswith("BOT:SIZE:"):
+
+        if not require_state(uid, reply_token, "WAIT_SIZE"):
+            return
+
         parts = text.split(":")
         if len(parts) != 4:
             send_menu(reply_token)
             return
 
         _, _, color, size = parts
+
+        if data.get("color") != color:
+            send_menu(reply_token)
+            return
 
         stock = get_stock(color, size)
         price = get_price(color, size)
@@ -159,15 +176,29 @@ def handle(uid: str, reply_token: str, text: str):
         set_session(uid, "WAIT_QTY", {"color": color, "size": size})
         return
 
-    # ---------------- SELECT QTY ----------------
+    # ---------------- QTY ----------------
     if text.startswith("BOT:QTY:"):
+
+        if not require_state(uid, reply_token, "WAIT_QTY"):
+            return
+
         parts = text.split(":")
         if len(parts) != 5:
             send_menu(reply_token)
             return
 
         _, _, color, size, qty_str = parts
+
+        if data.get("color") != color or data.get("size") != size:
+            send_menu(reply_token)
+            return
+
         qty = int(qty_str)
+        stock = get_stock(color, size)
+
+        if qty > stock:
+            reply_message(reply_token, [{"type": "text", "text": "สต๊อกไม่พอ ❌"}])
+            return
 
         price = get_price(color, size)
         total = qty * price
@@ -180,6 +211,8 @@ def handle(uid: str, reply_token: str, text: str):
                 "size": size,
                 "qty": qty,
                 "price": price,
+                "total": total,
+                "confirmed": False,
             },
         )
 
@@ -202,7 +235,10 @@ def handle(uid: str, reply_token: str, text: str):
     # ---------------- CONFIRM ----------------
     if text == "BOT:CONFIRM":
 
-        if state != "WAIT_CONFIRM" or not data:
+        if not require_state(uid, reply_token, "WAIT_CONFIRM"):
+            return
+
+        if data.get("confirmed"):
             send_menu(reply_token)
             return
 
@@ -214,9 +250,9 @@ def handle(uid: str, reply_token: str, text: str):
 
         if not ok:
             reply_message(reply_token, [{"type": "text", "text": "สต๊อกไม่พอ ❌"}])
+            clear_session(uid)
             return
 
-        # import ตอนใช้จริง ป้องกัน circular
         from services.order_service import create_order
         from services.admin_service import notify_admin_new_order
 
@@ -227,9 +263,7 @@ def handle(uid: str, reply_token: str, text: str):
 
         reply_message(
             reply_token,
-            [
-                {"type": "text", "text": f"รับออเดอร์แล้ว ✅\nORDER ID: {order_id}"},
-            ],
+            [{"type": "text", "text": f"รับออเดอร์แล้ว ✅\nORDER ID: {order_id}"}],
         )
         return
 
@@ -239,24 +273,16 @@ def handle(uid: str, reply_token: str, text: str):
         send_menu(reply_token)
         return
 
-    # ---------------- ADMIN CHAT MODE ----------------
+    # ---------------- ADMIN CHAT ----------------
     if text == "BOT:ADMIN":
         set_session(uid, "ADMIN_CHAT", {})
-        reply_message(
-            reply_token,
-            [{"type": "text", "text": "พิมพ์ข้อความส่งหาแอดมินได้เลย"}],
-        )
+        reply_message(reply_token, [{"type": "text", "text": "พิมพ์ข้อความส่งหาแอดมินได้เลย"}])
         return
 
     if state == "ADMIN_CHAT":
-        # forward ไป admin
         from services.admin_service import forward_to_admin
         forward_to_admin(uid, text)
-
-        reply_message(
-            reply_token,
-            [{"type": "text", "text": "ส่งข้อความถึงแอดมินแล้ว ✅"}],
-        )
+        reply_message(reply_token, [{"type": "text", "text": "ส่งถึงแอดมินแล้ว ✅"}])
         return
 
     # ---------------- DEFAULT ----------------
@@ -264,7 +290,7 @@ def handle(uid: str, reply_token: str, text: str):
 
 
 # ==========================================================
-# ENTRY POINT
+# ENTRY
 # ==========================================================
 
 def handle_event(event: dict):
