@@ -1,0 +1,24 @@
+hardy-shop-bot/
+│
+├── app.py
+│
+├── core/
+│   ├── config.py
+│   ├── security.py
+│   └── utils.py
+│
+├── services/
+│   ├── sheets_service.py
+│   ├── stock_service.py
+│   ├── session_service.py
+│   ├── order_service.py
+│   └── admin_service.py
+│
+├── integrations/
+│   └── line_api.py
+│
+├── features/
+│   └── order_flow.py
+│
+├── requirements.txt
+└── README.md
