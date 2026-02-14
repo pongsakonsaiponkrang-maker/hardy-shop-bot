@@ -212,3 +212,27 @@ def handle(uid: str, reply_token: str, text: str):
     # DEFAULT
     # =========================
     send_menu(reply_token)
+# ==========================================================
+# ENTRY POINT FOR APP
+# ==========================================================
+
+def handle_event(event: dict):
+    """
+    Main entry point called from app.py
+    """
+    try:
+        if event.get("type") != "message":
+            return
+
+        message = event.get("message", {})
+        if message.get("type") != "text":
+            return
+
+        user_id = event["source"]["userId"]
+        reply_token = event["replyToken"]
+        text = message.get("text", "").strip()
+
+        handle_text(user_id, reply_token, text)
+
+    except Exception as e:
+        print("ORDER FLOW ERROR:", e)
