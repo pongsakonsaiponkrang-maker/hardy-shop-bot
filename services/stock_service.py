@@ -1,96 +1,155 @@
 # ==========================================================
-# STOCK SERVICE
-# Manage stock + price from HARDY_STOCK sheet
+# HARDY - STOCK SERVICE
+# Handles:
+# - Get available colors
+# - Get available sizes per color
+# - Get stock
+# - Get price
+# - Deduct stock safely
 # ==========================================================
 
+from typing import Dict, List, Tuple, Any
 from services.sheets_service import get_stock_sheet
+from core.utils import safe_int
 
 
-# ==============================
-# Get All Records
-# ==============================
-def _get_records():
+# ----------------------------------------------------------
+# Internal helpers
+# ----------------------------------------------------------
+
+def _get_header_map(values: List[List[str]]) -> Dict[str, int]:
+    """
+    Map header name -> column index
+    Expected headers: color, size, stock, price
+    """
+    header = [h.strip().lower() for h in values[0]]
+    return {name: header.index(name) for name in header}
+
+
+def _get_all_rows():
     sheet = get_stock_sheet()
-    return sheet.get_all_records()
+    values = sheet.get_all_values()
+    if not values or len(values) < 2:
+        return [], {}
+
+    header_map = _get_header_map(values)
+    rows = values[1:]  # skip header
+    return rows, header_map
 
 
-# ==============================
-# Available Colors (มี stock > 0)
-# ==============================
-def get_available_colors():
-    records = _get_records()
+# ----------------------------------------------------------
+# Public API
+# ----------------------------------------------------------
+
+def get_available_colors() -> List[str]:
+    """
+    Return only colors that have stock > 0
+    """
+    rows, header = _get_all_rows()
     colors = set()
 
-    for r in records:
-        stock = int(r.get("stock", 0))
-        if stock > 0:
-            colors.add(r.get("color"))
+    for row in rows:
+        try:
+            stock = safe_int(row[header["stock"]])
+            if stock > 0:
+                colors.add(row[header["color"]])
+        except Exception:
+            continue
 
-    return list(colors)
+    return sorted(list(colors))
 
 
-# ==============================
-# Available Sizes By Color
-# ==============================
-def get_available_sizes(color: str):
-    records = _get_records()
+def get_available_sizes(color: str) -> List[str]:
+    """
+    Return sizes with stock > 0 for given color
+    """
+    rows, header = _get_all_rows()
     sizes = []
 
-    for r in records:
-        if r.get("color") == color and int(r.get("stock", 0)) > 0:
-            sizes.append(r.get("size"))
+    for row in rows:
+        try:
+            if row[header["color"]] != color:
+                continue
+
+            stock = safe_int(row[header["stock"]])
+            if stock > 0:
+                sizes.append(row[header["size"]])
+        except Exception:
+            continue
 
     return sizes
 
 
-# ==============================
-# Get Stock
-# ==============================
-def get_stock(color: str, size: str):
-    records = _get_records()
+def get_stock(color: str, size: str) -> int:
+    rows, header = _get_all_rows()
 
-    for r in records:
-        if r.get("color") == color and r.get("size") == size:
-            return int(r.get("stock", 0))
-
-    return 0
-
-
-# ==============================
-# Get Price
-# ==============================
-def get_price(color: str, size: str):
-    records = _get_records()
-
-    for r in records:
-        if r.get("color") == color and r.get("size") == size:
-            return int(r.get("price", 0))
+    for row in rows:
+        try:
+            if (
+                row[header["color"]] == color and
+                row[header["size"]] == size
+            ):
+                return safe_int(row[header["stock"]])
+        except Exception:
+            continue
 
     return 0
 
 
-# ==============================
-# Deduct Stock
-# ==============================
-def deduct_stock(color: str, size: str, qty: int):
+def get_price(color: str, size: str) -> int:
+    rows, header = _get_all_rows()
+
+    for row in rows:
+        try:
+            if (
+                row[header["color"]] == color and
+                row[header["size"]] == size
+            ):
+                return safe_int(row[header["price"]])
+        except Exception:
+            continue
+
+    return 0
+
+
+def deduct_stock(color: str, size: str, qty: int) -> Tuple[bool, int]:
+    """
+    Safely deduct stock.
+    Return: (success, remaining_stock)
+    """
     sheet = get_stock_sheet()
-    records = sheet.get_all_values()
+    values = sheet.get_all_values()
 
-    header = records[0]
-    col_color = header.index("color")
-    col_size = header.index("size")
-    col_stock = header.index("stock")
+    if not values or len(values) < 2:
+        return False, 0
 
-    for i in range(1, len(records)):
-        row = records[i]
+    header = _get_header_map(values)
 
-        if row[col_color] == color and row[col_size] == size:
-            current = int(row[col_stock])
-            if current < qty:
-                return False, current
+    for i in range(1, len(values)):  # start from row 2
+        row = values[i]
 
-            new_stock = current - qty
-            sheet.update_cell(i + 1, col_stock + 1, new_stock)
-            return True, new_stock
+        try:
+            if (
+                row[header["color"]] == color and
+                row[header["size"]] == size
+            ):
+                current = safe_int(row[header["stock"]])
+
+                if qty <= 0 or current < qty:
+                    return False, current
+
+                new_stock = current - qty
+
+                # update sheet (row index +1 because sheet index starts at 1)
+                sheet.update_cell(
+                    i + 1,
+                    header["stock"] + 1,
+                    new_stock
+                )
+
+                return True, new_stock
+
+        except Exception:
+            continue
 
     return False, 0
