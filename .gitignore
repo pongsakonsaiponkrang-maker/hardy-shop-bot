@@ -1,8 +1,4 @@
-LINE_CHANNEL_ACCESS_TOKEN=xhve2k9MMOr3m7pGbv66BPjdQvp4YmsXNdaYMTBb8Nfv+Fc00fJJnSJSjevX1rPnvuBE6c+7QQp+y8nh7S+plzqQoqIql89MPUMB6WIIyzMa+GgQnuPR1VPsIb3cmdijtHdh5QxAs5mubuVP0elCkQdB04t89/1O/w1cDnyilFU=
-LINE_CHANNEL_SECRET=703445d5283a57ec4ffc54b18afbb8e1
-SHEET_ID=1nuWNjEJVAbXZipKwrpZGV-mJG5JaqdvlO2EJJWVXbc0
-ORDERS_SHEET_NAME=HARDY_ORDER
-SESSIONS_SHEET_NAME=HARDY_SESSION
-GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"YOUR_PROJECT","private_key_id":"YOUR_KEY_ID","private_key":"-----BEGIN PRIVATE KEY-----\nYOUR_PRIVATE_KEY\n-----END PRIVATE KEY-----\n","client_email":"YOUR_SERVICE_ACCOUNT_EMAIL","client_id":"YOUR_CLIENT_ID","token_uri":"https://oauth2.googleapis.com/token"}
-PRICE_PER_PIECE=1290
-ADMIN_USER_ID=
+.env
+__pycache__/
+*.pyc
+venv/
