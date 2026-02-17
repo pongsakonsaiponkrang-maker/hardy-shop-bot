@@ -1,9 +1,8 @@
 # ==========================================================
-# HARDY ORDER FLOW - V3.2 CLEAN STABLE
-# Fully rewritten for stability
+# HARDY ORDER FLOW - PRODUCTION FINAL
+# Clean State Machine
 # ==========================================================
 
-from typing import List, Tuple, Dict, Any
 from integrations.line_api import reply_message
 from services.stock_service import (
     get_available_colors,
@@ -17,25 +16,15 @@ from services.session_service import (
     set_session,
     clear_session,
 )
+from services.order_service import create_order
 from core.utils import safe_int, gen_token
 
 
 # ==========================================================
-# HELPERS
+# Helpers
 # ==========================================================
 
-def norm(s: str) -> str:
-    return (s or "").strip().lower()
-
-
-def parse_payload(text: str):
-    if not text.startswith("BOT:"):
-        return None, []
-    parts = text.split(":")
-    return parts[0], parts[1:]
-
-
-def quick(text: str, buttons: List[Tuple[str, str]]):
+def quick(text, buttons):
     return {
         "type": "text",
         "text": text,
@@ -55,25 +44,12 @@ def quick(text: str, buttons: List[Tuple[str, str]]):
     }
 
 
-def send_menu(reply_token):
-    reply_message(
-        reply_token,
-        [
-            quick(
-                "👖 HARDY\nเลือกเมนู:",
-                [
-                    ("🛒 สั่งซื้อ", "BOT:ORDER"),
-                    ("🎨 ดูสี", "BOT:COLORS"),
-                    ("💬 คุยกับแอดมิน", "BOT:ADMIN"),
-                ],
-            )
-        ],
-    )
+def parse_payload(text):
+    if not text.startswith("BOT:"):
+        return None, []
+    parts = text.split(":")
+    return parts[0], parts[1:]
 
-
-# ==========================================================
-# VALIDATION
-# ==========================================================
 
 def valid_phone(p):
     p = p.replace("-", "").replace(" ", "")
@@ -89,27 +65,79 @@ def valid_address(a):
 
 
 # ==========================================================
-# MAIN FLOW
+# Main Flow
 # ==========================================================
 
-def handle(uid: str, reply_token: str, text: str):
+def handle(uid, reply_token, text):
 
+    text = text.strip()
     session = get_session(uid) or {}
     state = session.get("state", "IDLE")
     data = session.get("data", {}) or {}
-    text = text.strip()
 
-    # Reset
+    # ------------------------------------------------------
+    # RESET
+    # ------------------------------------------------------
+
     if text.lower() in ["เมนู", "menu", "hi", "start"]:
         clear_session(uid)
         send_menu(reply_token)
         return
 
-    cmd, parts = parse_payload(text)
+    # ------------------------------------------------------
+    # STATE FIRST (สำคัญมาก)
+    # ------------------------------------------------------
+
+    if state == "WAIT_NAME":
+        if not valid_name(text):
+            reply_message(reply_token, [{"type": "text", "text": "ชื่อสั้นเกินไป"}])
+            return
+
+        data["name"] = text
+        set_session(uid, "WAIT_PHONE", data)
+        reply_message(reply_token, [{"type": "text", "text": "พิมพ์เบอร์โทร (10 หลัก):"}])
+        return
+
+    if state == "WAIT_PHONE":
+        if not valid_phone(text):
+            reply_message(reply_token, [{"type": "text", "text": "เบอร์ไม่ถูกต้อง"}])
+            return
+
+        data["phone"] = text
+        set_session(uid, "WAIT_ADDRESS", data)
+        reply_message(reply_token, [{"type": "text", "text": "พิมพ์ที่อยู่จัดส่ง:"}])
+        return
+
+    if state == "WAIT_ADDRESS":
+        if not valid_address(text):
+            reply_message(reply_token, [{"type": "text", "text": "ที่อยู่สั้นเกินไป"}])
+            return
+
+        data["address"] = text
+        data["confirm_token"] = gen_token()
+        data["payment_status"] = "PENDING"
+
+        set_session(uid, "WAIT_FINAL_CONFIRM", data)
+
+        reply_message(
+            reply_token,
+            [
+                quick(
+                    f"📦 ยืนยันทั้งหมด\n"
+                    f"{data['color']} / {data['size']}\n"
+                    f"{data['qty']} ตัว\nรวม {data['total']} บาท\n\n"
+                    f"{data['name']}\n{data['phone']}\n{data['address']}",
+                    [("✅ ยืนยันและรอชำระเงิน", "BOT:FINAL_CONFIRM")],
+                )
+            ],
+        )
+        return
 
     # ------------------------------------------------------
-    # START ORDER
+    # COMMAND HANDLING
     # ------------------------------------------------------
+
+    cmd, parts = parse_payload(text)
 
     if cmd == "BOT" and parts == ["ORDER"]:
         clear_session(uid)
@@ -119,25 +147,16 @@ def handle(uid: str, reply_token: str, text: str):
             reply_message(reply_token, [{"type": "text", "text": "สินค้าหมด ❌"}])
             return
 
+        set_session(uid, "WAIT_COLOR", {})
+
         reply_message(
             reply_token,
             [quick("เลือกสี:", [(c, f"BOT:COLOR:{c}") for c in colors])],
         )
-
-        set_session(uid, "WAIT_COLOR", {})
         return
 
-    # ------------------------------------------------------
-    # COLOR
-    # ------------------------------------------------------
-
     if cmd == "BOT" and parts[:1] == ["COLOR"]:
-
         if state != "WAIT_COLOR":
-            send_menu(reply_token)
-            return
-
-        if len(parts) != 2:
             send_menu(reply_token)
             return
 
@@ -147,6 +166,8 @@ def handle(uid: str, reply_token: str, text: str):
         if not sizes:
             reply_message(reply_token, [{"type": "text", "text": "สีนี้หมด ❌"}])
             return
+
+        set_session(uid, "WAIT_SIZE", {"color": color})
 
         reply_message(
             reply_token,
@@ -161,35 +182,21 @@ def handle(uid: str, reply_token: str, text: str):
                 )
             ],
         )
-
-        set_session(uid, "WAIT_SIZE", {"color": color})
         return
 
-    # ------------------------------------------------------
-    # SIZE
-    # ------------------------------------------------------
-
     if cmd == "BOT" and parts[:1] == ["SIZE"]:
-
         if state != "WAIT_SIZE":
             send_menu(reply_token)
             return
 
-        if len(parts) != 3:
-            send_menu(reply_token)
-            return
-
-        color = parts[1]
-        size = parts[2]
-
-        if norm(data.get("color")) != norm(color):
-            send_menu(reply_token)
-            return
+        color, size = parts[1], parts[2]
 
         stock = get_stock(color, size)
         if stock <= 0:
             reply_message(reply_token, [{"type": "text", "text": "สต๊อกหมด ❌"}])
             return
+
+        set_session(uid, "WAIT_QTY", {"color": color, "size": size})
 
         reply_message(
             reply_token,
@@ -203,35 +210,19 @@ def handle(uid: str, reply_token: str, text: str):
                 )
             ],
         )
-
-        set_session(uid, "WAIT_QTY", {"color": color, "size": size})
         return
 
-    # ------------------------------------------------------
-    # QTY
-    # ------------------------------------------------------
-
     if cmd == "BOT" and parts[:1] == ["QTY"]:
-
         if state != "WAIT_QTY":
             send_menu(reply_token)
             return
 
-        if len(parts) != 4:
-            send_menu(reply_token)
-            return
-
         color, size, qty_str = parts[1], parts[2], parts[3]
-
-        if norm(data.get("color")) != norm(color) or norm(data.get("size")) != norm(size):
-            send_menu(reply_token)
-            return
-
         qty = safe_int(qty_str, 0)
-        stock = get_stock(color, size)
 
+        stock = get_stock(color, size)
         if qty <= 0 or qty > stock:
-            reply_message(reply_token, [{"type": "text", "text": "จำนวนไม่ถูกต้อง ❌"}])
+            reply_message(reply_token, [{"type": "text", "text": "จำนวนไม่ถูกต้อง"}])
             return
 
         price = get_price(color, size)
@@ -260,106 +251,27 @@ def handle(uid: str, reply_token: str, text: str):
         )
         return
 
-    # ------------------------------------------------------
-    # CONFIRM ITEM
-    # ------------------------------------------------------
-
     if cmd == "BOT" and parts == ["ITEM_OK"]:
-
         if state != "WAIT_CONFIRM_ITEM":
             send_menu(reply_token)
             return
 
-        reply_message(reply_token, [{"type": "text", "text": "พิมพ์ชื่อ-นามสกุลผู้รับ:"}])
         set_session(uid, "WAIT_NAME", data)
+        reply_message(reply_token, [{"type": "text", "text": "พิมพ์ชื่อ-นามสกุลผู้รับ:"}])
         return
-
-    # ------------------------------------------------------
-    # NAME
-    # ------------------------------------------------------
-
-    if state == "WAIT_NAME":
-        if not valid_name(text):
-            reply_message(reply_token, [{"type": "text", "text": "ชื่อสั้นเกินไป"}])
-            return
-
-        data["name"] = text
-        reply_message(reply_token, [{"type": "text", "text": "พิมพ์เบอร์โทร (10 หลัก):"}])
-        set_session(uid, "WAIT_PHONE", data)
-        return
-
-    # ------------------------------------------------------
-    # PHONE
-    # ------------------------------------------------------
-
-    if state == "WAIT_PHONE":
-        if not valid_phone(text):
-            reply_message(reply_token, [{"type": "text", "text": "เบอร์ไม่ถูกต้อง"}])
-            return
-
-        data["phone"] = text
-        reply_message(reply_token, [{"type": "text", "text": "พิมพ์ที่อยู่จัดส่ง:"}])
-        set_session(uid, "WAIT_ADDRESS", data)
-        return
-
-    # ------------------------------------------------------
-    # ADDRESS
-    # ------------------------------------------------------
-
-    if state == "WAIT_ADDRESS":
-        if not valid_address(text):
-            reply_message(reply_token, [{"type": "text", "text": "ที่อยู่สั้นเกินไป"}])
-            return
-
-        data["address"] = text
-        data["confirm_token"] = gen_token()
-        data["confirm_lock"] = False
-        data["payment_status"] = "PENDING"
-
-        reply_message(
-            reply_token,
-            [
-                quick(
-                    f"📦 ยืนยันทั้งหมด\n{data['color']} / {data['size']}\n"
-                    f"{data['qty']} ตัว\nรวม {data['total']} บาท\n\n"
-                    f"ผู้รับ: {data['name']}\n"
-                    f"เบอร์: {data['phone']}\n"
-                    f"ที่อยู่: {data['address']}",
-                    [("✅ ยืนยันและรอชำระเงิน", "BOT:FINAL_CONFIRM")],
-                )
-            ],
-        )
-
-        set_session(uid, "WAIT_FINAL_CONFIRM", data)
-        return
-
-    # ------------------------------------------------------
-    # FINAL CONFIRM
-    # ------------------------------------------------------
 
     if cmd == "BOT" and parts == ["FINAL_CONFIRM"]:
-
         if state != "WAIT_FINAL_CONFIRM":
             send_menu(reply_token)
             return
 
-        if data.get("confirm_lock"):
-            reply_message(reply_token, [{"type": "text", "text": "กำลังดำเนินการ..."}])
-            return
-
-        data["confirm_lock"] = True
-        set_session(uid, "WAIT_FINAL_CONFIRM", data)
-
-        from services.order_service import create_order
-
-        ok, remain = deduct_stock(data["color"], data["size"], data["qty"])
+        ok, _ = deduct_stock(data["color"], data["size"], data["qty"])
         if not ok:
             clear_session(uid)
             reply_message(reply_token, [{"type": "text", "text": "สต๊อกไม่พอ ❌"}])
             return
 
         order_id = create_order(uid, data)
-
         clear_session(uid)
 
         reply_message(
@@ -368,16 +280,28 @@ def handle(uid: str, reply_token: str, text: str):
         )
         return
 
-    # ------------------------------------------------------
-    # DEFAULT
-    # ------------------------------------------------------
-
     send_menu(reply_token)
 
 
-def handle_event(event: dict):
+def send_menu(reply_token):
+    reply_message(
+        reply_token,
+        [
+            quick(
+                "👖 HARDY\nเลือกเมนู:",
+                [
+                    ("🛒 สั่งซื้อ", "BOT:ORDER"),
+                    ("🎨 ดูสี", "BOT:COLORS"),
+                ],
+            )
+        ],
+    )
+
+
+def handle_event(event):
     if event.get("type") != "message":
         return
+
     msg = event.get("message", {})
     if msg.get("type") != "text":
         return
