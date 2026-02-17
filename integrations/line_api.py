@@ -37,3 +37,15 @@ def broadcast_message(messages: list):
     r = requests.post(LINE_BROADCAST_URL, headers=_headers(), json=payload, timeout=10)
     if r.status_code >= 300:
         print("LINE broadcast error:", r.status_code, r.text)
+def push_message(to_user_id: str, text: str):
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+    }
+    payload = {
+        "to": to_user_id,
+        "messages": [{"type": "text", "text": text}],
+    }
+    r = requests.post(url, headers=headers, json=payload, timeout=15)
+    return r.status_code, r.text
