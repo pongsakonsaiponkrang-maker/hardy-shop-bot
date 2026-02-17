@@ -1,91 +1,82 @@
 # ==========================================================
-# HARDY STOCK SERVICE - WITH CACHE
+# HARDY STOCK SERVICE - FIXED VERSION
+# ลดสต๊อกจริง
 # ==========================================================
 
-import time
-from services.sheets_service import get_all_records
-from core.config import WS_STOCK, DEFAULT_PRICE_THB
-
-_CACHE = {
-    "data": [],
-    "last_load": 0,
-}
-
-CACHE_TTL = 5  # seconds
+from core.config import WS_STOCK
+from services.sheets_service import get_ws
 
 
-def _clean(s):
-    return str(s or "").strip()
-
-
-def _norm(s):
-    return _clean(s).lower()
-
-
-def _load():
-    now = time.time()
-
-    # Use cache if not expired
-    if now - _CACHE["last_load"] < CACHE_TTL:
-        return _CACHE["data"]
-
-    rows = get_all_records(WS_STOCK)
-    out = []
-
-    for r in rows:
-        color = _clean(r.get("color"))
-        size = _clean(r.get("size"))
-        if not color or not size:
-            continue
-
-        stock = int(r.get("stock") or 0)
-        price = int(r.get("price") or DEFAULT_PRICE_THB)
-
-        out.append({
-            "color": color,
-            "size": size,
-            "stock": stock,
-            "price": price,
-        })
-
-    _CACHE["data"] = out
-    _CACHE["last_load"] = now
-
-    return out
+def _normalize(s):
+    return str(s).strip()
 
 
 def get_available_colors():
-    rows = _load()
-    return sorted({r["color"] for r in rows if r["stock"] > 0})
+    ws = get_ws(WS_STOCK)
+    rows = ws.get_all_values()[1:]
 
-
-def get_available_sizes(color: str):
-    rows = _load()
-    return sorted(
-        r["size"]
-        for r in rows
-        if _norm(r["color"]) == _norm(color) and r["stock"] > 0
-    )
-
-
-def get_stock(color: str, size: str):
-    rows = _load()
+    colors = set()
     for r in rows:
-        if _norm(r["color"]) == _norm(color) and _norm(r["size"]) == _norm(size):
-            return r["stock"]
+        if r and int(r[2]) > 0:
+            colors.add(_normalize(r[0]))
+
+    return sorted(list(colors))
+
+
+def get_available_sizes(color):
+    ws = get_ws(WS_STOCK)
+    rows = ws.get_all_values()[1:]
+
+    sizes = []
+    for r in rows:
+        if _normalize(r[0]) == _normalize(color) and int(r[2]) > 0:
+            sizes.append(_normalize(r[1]))
+
+    return sizes
+
+
+def get_stock(color, size):
+    ws = get_ws(WS_STOCK)
+    rows = ws.get_all_values()[1:]
+
+    for r in rows:
+        if _normalize(r[0]) == _normalize(color) and _normalize(r[1]) == _normalize(size):
+            return int(r[2])
+
     return 0
 
 
-def get_price(color: str, size: str):
-    rows = _load()
+def get_price(color, size):
+    ws = get_ws(WS_STOCK)
+    rows = ws.get_all_values()[1:]
+
     for r in rows:
-        if _norm(r["color"]) == _norm(color) and _norm(r["size"]) == _norm(size):
-            return r["price"]
-    return DEFAULT_PRICE_THB
+        if _normalize(r[0]) == _normalize(color) and _normalize(r[1]) == _normalize(size):
+            return int(r[3])
+
+    return 0
 
 
-def deduct_stock(color: str, size: str, qty: int):
-    # คุณใช้ logic เดิม update sheet
-    # หลัง update เสร็จ ให้ reset cache
-    _CACHE["last_load"] = 0
-    return True, 0
+def deduct_stock(color, size, qty):
+    ws = get_ws(WS_STOCK)
+    rows = ws.get_all_values()
+
+    for idx, r in enumerate(rows[1:], start=2):
+
+        if (
+            _normalize(r[0]) == _normalize(color)
+            and _normalize(r[1]) == _normalize(size)
+        ):
+            current_stock = int(r[2])
+
+            if current_stock < qty:
+                return False, current_stock
+
+            new_stock = current_stock - qty
+
+            # update stock column (C)
+            ws.update(f"C{idx}", [[new_stock]])
+
+            return True, new_stock
+
+    return False, 0
