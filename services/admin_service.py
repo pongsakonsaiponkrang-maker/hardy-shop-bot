@@ -1,57 +1,36 @@
-# ==========================================================
-# ADMIN SERVICE
-# Handle admin notification + admin chat mode
-# ==========================================================
+from __future__ import annotations
+from typing import Any, Dict, List
 
-from integrations.line_api import push_message
 from core.config import ADMIN_USER_IDS
-from core.utils import now_str
+from integrations.line_api import push_message
 
-
-# ==============================
-# Notify Admin: New Order
-# ==============================
-def notify_admin_new_order(order_id: str, data: dict, remaining_stock: int):
-    """
-    แจ้งเตือน admin เมื่อมีออเดอร์ใหม่
-    """
-
-    qty = int(data["qty"])
-    price = int(data["price"])
-    amount = qty * price
-
-    message = (
-        "🔥 NEW ORDER (HARDY)\n\n"
-        f"ORDER ID: {order_id}\n"
-        f"ชื่อ: {data['name']}\n"
-        f"เบอร์: {data['phone']}\n"
-        f"ที่อยู่: {data['address']}\n\n"
-        f"สินค้า: HARDY Utility Chino\n"
-        f"สี: {data['color']} | ไซส์: {data['size']} | จำนวน: {qty}\n"
-        f"ราคา/ตัว: {price:,} บาท\n"
-        f"ยอดรวม: {amount:,} บาท\n"
-        f"คงเหลือสต๊อก: {remaining_stock}\n\n"
-        f"เวลา: {now_str()}"
-    )
-
-    for admin_id in ADMIN_USER_IDS:
-        try:
-            push_message(admin_id, message)
-        except Exception:
-            pass
-
-
-# ==============================
-# Notify Admin: Low Stock
-# ==============================
-def notify_low_stock(color: str, size: str, remaining_stock: int):
-    if remaining_stock > 3:
+def notify_admin_new_order(order_id: str, data: Dict[str, Any], remain: int):
+    if not ADMIN_USER_IDS:
         return
 
-    warn = f"⚠ STOCK LOW: {color} {size} เหลือ {remaining_stock}"
+    msg = (
+        "🆕 NEW ORDER\n"
+        f"ORDER ID: {order_id}\n"
+        f"{data.get('color')} / {data.get('size')}\n"
+        f"QTY: {data.get('qty')} | TOTAL: {data.get('total')}฿\n"
+        f"Remain stock: {remain}"
+    )
 
-    for admin_id in ADMIN_USER_IDS:
-        try:
-            push_message(admin_id, warn)
-        except Exception:
-            pass
+    for admin_uid in ADMIN_USER_IDS:
+        push_message(admin_uid, [{"type": "text", "text": msg}])
+
+def forward_to_admin(from_uid: str, text: str):
+    if not ADMIN_USER_IDS:
+        return
+
+    text = (text or "").strip()
+    if not text:
+        return
+
+    # simple anti-spam: limit length
+    if len(text) > 500:
+        text = text[:500] + "..."
+
+    msg = f"💬 USER->ADMIN\nUID: {from_uid}\n{text}"
+    for admin_uid in ADMIN_USER_IDS:
+        push_message(admin_uid, [{"type": "text", "text": msg}])
