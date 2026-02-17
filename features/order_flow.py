@@ -1,11 +1,13 @@
 # ==========================================================
-# HARDY ORDER FLOW - V3.1 PRODUCTION SAFE
-# Strict State / Anti-Skip / Anti-Double Confirm / Idempotent
+# HARDY ORDER FLOW - V3.2 PRODUCTION SAFE
+# Confirm 2-step (A) + Collect Name/Phone/Address
+# Final Confirm: ONLY ONE BUTTON (no cancel)
+# Idempotent + confirm_lock + token
 # parse_payload() / quickReply limit + fallback
 # ==========================================================
 
 from __future__ import annotations
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Dict, Any
 
 from integrations.line_api import reply_message
 from services.stock_service import (
@@ -28,49 +30,17 @@ from core.utils import shorten_label, safe_int, gen_token
 # ----------------------------------------------------------
 
 def parse_payload(text: str) -> Tuple[str, List[str]]:
-    """
-    Returns (cmd, parts)
-    Example:
-      "BOT:COLOR:Navy" -> ("BOT", ["COLOR","Navy"])
-      "BOT:QTY:Navy:M:2" -> ("BOT", ["QTY","Navy","M","2"])
-    If not payload, cmd="".
-    """
     t = (text or "").strip()
     if not t.startswith("BOT:"):
         return "", []
     parts = t.split(":")
     if len(parts) < 2:
         return "", []
-    cmd = parts[0]  # "BOT"
-    return cmd, parts[1:]
-
+    return parts[0], parts[1:]  # ("BOT", [...])
 
 # ----------------------------------------------------------
 # Quick Reply builder with limit + fallback
 # ----------------------------------------------------------
-
-def build_quick_or_fallback(text: str, buttons: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
-    """
-    If buttons <= QUICK_REPLY_LIMIT: return 1 quick reply message
-    Else: return text list + quick with first QUICK_REPLY_LIMIT buttons
-    """
-    buttons = buttons or []
-    if len(buttons) <= QUICK_REPLY_LIMIT:
-        return [quick(text, buttons)]
-
-    # fallback list (user can still tap from first 13 quick buttons)
-    lines = [text, ""]
-    # show list for all items
-    for i, (label, payload) in enumerate(buttons, start=1):
-        lines.append(f"{i}. {label}")
-
-    fallback_text = "\n".join(lines).strip()
-    limited = buttons[:QUICK_REPLY_LIMIT]
-    return [
-        {"type": "text", "text": fallback_text},
-        quick("เลือกจากปุ่มด้านล่าง (แสดงบางส่วน):", limited),
-    ]
-
 
 def quick(text: str, buttons: List[Tuple[str, str]]) -> Dict[str, Any]:
     buttons = (buttons or [])[:QUICK_REPLY_LIMIT]
@@ -92,22 +62,38 @@ def quick(text: str, buttons: List[Tuple[str, str]]) -> Dict[str, Any]:
         },
     }
 
+def build_quick_or_fallback(text: str, buttons: List[Tuple[str, str]]) -> List[Dict[str, Any]]:
+    buttons = buttons or []
+    if len(buttons) <= QUICK_REPLY_LIMIT:
+        return [quick(text, buttons)]
+
+    lines = [text, ""]
+    for i, (label, _) in enumerate(buttons, start=1):
+        lines.append(f"{i}. {label}")
+    fallback_text = "\n".join(lines).strip()
+
+    limited = buttons[:QUICK_REPLY_LIMIT]
+    return [
+        {"type": "text", "text": fallback_text},
+        quick("เลือกจากปุ่มด้านล่าง (แสดงบางส่วน):", limited),
+    ]
 
 # ----------------------------------------------------------
 # Menu
 # ----------------------------------------------------------
 
 def send_menu(reply_token: str):
-    msgs = build_quick_or_fallback(
-        "👖 HARDY\nเลือกเมนู:",
-        [
-            ("🛒 สั่งซื้อ", "BOT:ORDER"),
-            ("🎨 ดูสี", "BOT:COLORS"),
-            ("💬 คุยกับแอดมิน", "BOT:ADMIN"),
-        ],
+    reply_message(
+        reply_token,
+        build_quick_or_fallback(
+            "👖 HARDY\nเลือกเมนู:",
+            [
+                ("🛒 สั่งซื้อ", "BOT:ORDER"),
+                ("🎨 ดูสี", "BOT:COLORS"),
+                ("💬 คุยกับแอดมิน", "BOT:ADMIN"),
+            ],
+        ),
     )
-    reply_message(reply_token, msgs)
-
 
 # ----------------------------------------------------------
 # State guard
@@ -120,6 +106,21 @@ def require_state(uid: str, reply_token: str, expected_state: str) -> bool:
         return False
     return True
 
+# ----------------------------------------------------------
+# Validators
+# ----------------------------------------------------------
+
+def is_valid_phone_10(s: str) -> bool:
+    s = (s or "").strip().replace("-", "").replace(" ", "")
+    return len(s) == 10 and s.isdigit() and s.startswith("0")
+
+def is_valid_name(s: str) -> bool:
+    s = (s or "").strip()
+    return len(s) >= 3
+
+def is_valid_address(s: str) -> bool:
+    s = (s or "").strip()
+    return len(s) >= 10
 
 # ----------------------------------------------------------
 # Main flow
@@ -132,7 +133,7 @@ def handle(uid: str, reply_token: str, text: str):
 
     plain = (text or "").strip()
 
-    # --- Global shortcuts ---
+    # Global reset/menu
     if plain.lower() in ["เมนู", "menu", "hi", "hello", "start"]:
         clear_session(uid)
         send_menu(reply_token)
@@ -140,7 +141,7 @@ def handle(uid: str, reply_token: str, text: str):
 
     cmd, parts = parse_payload(plain)
 
-    # --- MENU: colors ---
+    # COLORS
     if cmd == "BOT" and parts[:1] == ["COLORS"]:
         colors = get_available_colors()
         if not colors:
@@ -150,23 +151,20 @@ def handle(uid: str, reply_token: str, text: str):
         send_menu(reply_token)
         return
 
-    # --- START ORDER ---
+    # START ORDER
     if cmd == "BOT" and parts[:1] == ["ORDER"]:
         clear_session(uid)
-
         colors = get_available_colors()
         if not colors:
             reply_message(reply_token, [{"type": "text", "text": "สินค้าหมด ❌"}])
             return
 
         buttons = [(c, f"BOT:COLOR:{c}") for c in colors]
-        msgs = build_quick_or_fallback("เลือกสี:", buttons)
-        reply_message(reply_token, msgs)
-
+        reply_message(reply_token, build_quick_or_fallback("เลือกสี:", buttons))
         set_session(uid, "WAIT_COLOR", {})
         return
 
-    # --- COLOR ---
+    # COLOR
     if cmd == "BOT" and parts[:1] == ["COLOR"]:
         if not require_state(uid, reply_token, "WAIT_COLOR"):
             return
@@ -186,13 +184,11 @@ def handle(uid: str, reply_token: str, text: str):
             stock = get_stock(color, s)
             buttons.append((f"{s} | {price}฿ | {stock}", f"BOT:SIZE:{color}:{s}"))
 
-        msgs = build_quick_or_fallback(f"สี {color}\nเลือกไซส์:", buttons)
-        reply_message(reply_token, msgs)
-
+        reply_message(reply_token, build_quick_or_fallback(f"สี {color}\nเลือกไซส์:", buttons))
         set_session(uid, "WAIT_SIZE", {"color": color})
         return
 
-    # --- SIZE ---
+    # SIZE
     if cmd == "BOT" and parts[:1] == ["SIZE"]:
         if not require_state(uid, reply_token, "WAIT_SIZE"):
             return
@@ -201,8 +197,6 @@ def handle(uid: str, reply_token: str, text: str):
             return
 
         color, size = parts[1].strip(), parts[2].strip()
-
-        # anti-skip: ensure same color
         if data.get("color") != color:
             send_menu(reply_token)
             return
@@ -215,16 +209,14 @@ def handle(uid: str, reply_token: str, text: str):
 
         max_btn = min(stock, 5)
         buttons = [(str(n), f"BOT:QTY:{color}:{size}:{n}") for n in range(1, max_btn + 1)]
-        msgs = build_quick_or_fallback(
+        reply_message(reply_token, build_quick_or_fallback(
             f"{color} / {size}\nราคา {price} บาท\nเลือกจำนวน:",
             buttons,
-        )
-        reply_message(reply_token, msgs)
-
+        ))
         set_session(uid, "WAIT_QTY", {"color": color, "size": size})
         return
 
-    # --- QTY ---
+    # QTY -> item summary confirm (confirm step 1)
     if cmd == "BOT" and parts[:1] == ["QTY"]:
         if not require_state(uid, reply_token, "WAIT_QTY"):
             return
@@ -233,7 +225,6 @@ def handle(uid: str, reply_token: str, text: str):
             return
 
         color, size, qty_str = parts[1].strip(), parts[2].strip(), parts[3].strip()
-
         if data.get("color") != color or data.get("size") != size:
             send_menu(reply_token)
             return
@@ -251,71 +242,136 @@ def handle(uid: str, reply_token: str, text: str):
         price = get_price(color, size)
         total = qty * price
 
-        # Idempotency token for this confirm step
-        confirm_token = gen_token()
-
         set_session(
             uid,
-            "WAIT_CONFIRM",
+            "WAIT_CONFIRM_ITEM",
             {
                 "color": color,
                 "size": size,
                 "qty": qty,
                 "price": price,
                 "total": total,
-                "confirm_token": confirm_token,
-                "confirm_lock": False,
             },
         )
 
         reply_message(
             reply_token,
             build_quick_or_fallback(
-                f"🧾 สรุป\n{color} / {size}\n{qty} ตัว\nรวม {total} บาท",
+                f"🧾 สรุปสินค้า\n{color} / {size}\n{qty} ตัว\nรวม {total} บาท\n\nยืนยันสินค้าเพื่อกรอกข้อมูลจัดส่ง",
                 [
-                    ("✅ ยืนยัน", "BOT:CONFIRM"),
+                    ("✅ ยืนยันสินค้า", "BOT:ITEM_OK"),
                     ("❌ ยกเลิก", "BOT:CANCEL"),
                 ],
             ),
         )
         return
 
-    # --- CONFIRM (Idempotent + Lock) ---
-    if cmd == "BOT" and parts[:1] == ["CONFIRM"]:
-        if not require_state(uid, reply_token, "WAIT_CONFIRM"):
+    # CANCEL (allowed here)
+    if cmd == "BOT" and parts[:1] == ["CANCEL"]:
+        clear_session(uid)
+        send_menu(reply_token)
+        return
+
+    # ITEM_OK -> ask name
+    if cmd == "BOT" and parts[:1] == ["ITEM_OK"]:
+        if not require_state(uid, reply_token, "WAIT_CONFIRM_ITEM"):
             return
 
-        # reload latest session to avoid stale `data`
+        # reload latest
         session = get_session(uid) or {}
         data = session.get("data", {}) or {}
 
-        # hard guard
-        needed = ["color", "size", "qty", "price", "total", "confirm_token"]
+        reply_message(reply_token, [{"type": "text", "text": "กรุณาพิมพ์ ชื่อ-นามสกุล ผู้รับ:"}])
+        set_session(uid, "WAIT_NAME", data)
+        return
+
+    # WAIT_NAME
+    if state == "WAIT_NAME":
+        name = plain
+        if not is_valid_name(name):
+            reply_message(reply_token, [{"type": "text", "text": "ชื่อ-นามสกุลสั้นเกินไป ลองใหม่อีกครั้งครับ"}])
+            return
+        data["name"] = name
+        reply_message(reply_token, [{"type": "text", "text": "กรุณาพิมพ์เบอร์โทร (10 หลัก ขึ้นต้น 0):"}])
+        set_session(uid, "WAIT_PHONE", data)
+        return
+
+    # WAIT_PHONE
+    if state == "WAIT_PHONE":
+        phone = plain
+        if not is_valid_phone_10(phone):
+            reply_message(reply_token, [{"type": "text", "text": "เบอร์ไม่ถูกต้อง ❌\nต้องเป็น 10 หลัก และขึ้นต้นด้วย 0\nพิมพ์ใหม่อีกครั้ง:"}])
+            return
+        data["phone"] = phone.strip().replace(" ", "").replace("-", "")
+        reply_message(reply_token, [{"type": "text", "text": "กรุณาพิมพ์ที่อยู่จัดส่ง (อย่างน้อย 10 ตัวอักษร):"}])
+        set_session(uid, "WAIT_ADDRESS", data)
+        return
+
+    # WAIT_ADDRESS -> final summary + final confirm (ONLY ONE BUTTON)
+    if state == "WAIT_ADDRESS":
+        address = plain
+        if not is_valid_address(address):
+            reply_message(reply_token, [{"type": "text", "text": "ที่อยู่สั้นเกินไป ลองใหม่อีกครั้งครับ"}])
+            return
+        data["address"] = address
+
+        # Prepare idempotency token for final confirm
+        data["confirm_token"] = gen_token()
+        data["confirm_lock"] = False
+        data["payment_status"] = "PENDING"
+
+        summary = (
+            "📦 สรุปทั้งหมด\n"
+            f"สินค้า: {data.get('color')} / {data.get('size')}\n"
+            f"จำนวน: {data.get('qty')} ตัว\n"
+            f"รวม: {data.get('total')} บาท\n\n"
+            f"ผู้รับ: {data.get('name')}\n"
+            f"เบอร์: {data.get('phone')}\n"
+            f"ที่อยู่: {data.get('address')}\n\n"
+            "กดปุ่มด้านล่างเพื่อยืนยันและรอชำระเงิน"
+        )
+
+        reply_message(
+            reply_token,
+            build_quick_or_fallback(
+                summary,
+                [
+                    ("✅ ยืนยันและรอชำระเงิน", "BOT:FINAL_CONFIRM"),
+                ],
+            ),
+        )
+        set_session(uid, "WAIT_FINAL_CONFIRM", data)
+        return
+
+    # FINAL_CONFIRM (Idempotent + Lock)  (NO CANCEL here)
+    if cmd == "BOT" and parts[:1] == ["FINAL_CONFIRM"]:
+        if not require_state(uid, reply_token, "WAIT_FINAL_CONFIRM"):
+            return
+
+        session = get_session(uid) or {}
+        data = session.get("data", {}) or {}
+
+        needed = ["color", "size", "qty", "price", "total", "name", "phone", "address", "confirm_token"]
         if any(k not in data for k in needed):
             send_menu(reply_token)
             return
 
-        # 1) If locked -> tell user it's processing
         if data.get("confirm_lock") is True:
             reply_message(reply_token, [{"type": "text", "text": "ระบบกำลังดำเนินการ ✅"}])
             return
 
-        # 2) Lock immediately (anti double-tap / LINE retry)
+        # lock immediately
         data["confirm_lock"] = True
-        set_session(uid, "WAIT_CONFIRM", data)
+        set_session(uid, "WAIT_FINAL_CONFIRM", data)
 
-        # 3) Idempotent check in order_service
         from services.order_service import find_order_by_confirm_token, create_order
-        existed_order_id = find_order_by_confirm_token(data["confirm_token"])
-        if existed_order_id:
+        existed = find_order_by_confirm_token(data["confirm_token"])
+        if existed:
             clear_session(uid)
-            reply_message(
-                reply_token,
-                [{"type": "text", "text": f"รับออเดอร์แล้ว ✅\nORDER ID: {existed_order_id}"}],
-            )
+            reply_message(reply_token, [{"type": "text", "text": f"รับออเดอร์แล้ว ✅\nORDER ID: {existed}\nสถานะชำระเงิน: PENDING"}])
             return
 
-        # 4) Deduct stock (may fail if stock changed)
+        # deduct stock
         ok, remain = deduct_stock(data["color"], data["size"], int(data["qty"]))
         if not ok:
             clear_session(uid)
@@ -328,24 +384,19 @@ def handle(uid: str, reply_token: str, text: str):
             )
             return
 
-        # 5) Create order (guaranteed idempotent by token)
         order_id = create_order(uid, data)
 
-        # 6) Notify admin
         from services.admin_service import notify_admin_new_order
         notify_admin_new_order(order_id, data, remain)
 
         clear_session(uid)
-        reply_message(reply_token, [{"type": "text", "text": f"รับออเดอร์แล้ว ✅\nORDER ID: {order_id}"}])
+        reply_message(
+            reply_token,
+            [{"type": "text", "text": f"รับออเดอร์แล้ว ✅\nORDER ID: {order_id}\nสถานะชำระเงิน: PENDING"}],
+        )
         return
 
-    # --- CANCEL ---
-    if cmd == "BOT" and parts[:1] == ["CANCEL"]:
-        clear_session(uid)
-        send_menu(reply_token)
-        return
-
-    # --- ADMIN CHAT ---
+    # ADMIN CHAT
     if cmd == "BOT" and parts[:1] == ["ADMIN"]:
         set_session(uid, "ADMIN_CHAT", {})
         reply_message(reply_token, [{"type": "text", "text": "พิมพ์ข้อความส่งหาแอดมินได้เลย"}])
@@ -357,9 +408,8 @@ def handle(uid: str, reply_token: str, text: str):
         reply_message(reply_token, [{"type": "text", "text": "ส่งถึงแอดมินแล้ว ✅"}])
         return
 
-    # --- DEFAULT ---
+    # DEFAULT
     send_menu(reply_token)
-
 
 # ----------------------------------------------------------
 # Entry
@@ -369,7 +419,6 @@ def handle_event(event: dict):
     try:
         if event.get("type") != "message":
             return
-
         message = event.get("message", {})
         if message.get("type") != "text":
             return
