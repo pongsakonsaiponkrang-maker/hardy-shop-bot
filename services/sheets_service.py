@@ -1,14 +1,11 @@
 # ==========================================================
-# HARDY SHEETS SERVICE - PRODUCTION SAFE
-# No auto create worksheet
-# No repeated metadata fetch
+# HARDY SHEETS SERVICE - CLEAN VERSION
 # ==========================================================
 
 import json
 import gspread
 from google.oauth2.service_account import Credentials
 from core.config import GOOGLE_SERVICE_ACCOUNT_JSON, SHEET_ID
-
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
@@ -26,18 +23,15 @@ def get_ws(ws_name):
 
 
 def get_all_records(ws_name):
-    ws = get_ws(ws_name)
-    return ws.get_all_records()
+    return get_ws(ws_name).get_all_records()
 
 
 def append_row(ws_name, row):
-    ws = get_ws(ws_name)
-    ws.append_row(row, value_input_option="USER_ENTERED")
+    get_ws(ws_name).append_row(row, value_input_option="USER_ENTERED")
 
 
 def update_row(ws_name, row_index, row_values):
-    ws = get_ws(ws_name)
-    ws.update(f"A{row_index}", [row_values])
+    get_ws(ws_name).update(f"A{row_index}", [row_values])
 
 
 def find_row_by_value(ws_name, column_name, value):
