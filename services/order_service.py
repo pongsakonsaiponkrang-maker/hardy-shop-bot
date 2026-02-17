@@ -1,72 +1,102 @@
-from __future__ import annotations
-from typing import Any, Dict, Optional
+# ==========================================================
+# HARDY ORDER SERVICE - CLEAN VERSION
+# Compatible with new sheets_service
+# ==========================================================
 
 from core.config import WS_ORDER
-from core.utils import now_iso, gen_order_id
-from services.sheets_service import ensure_worksheet, get_all_records, append_row
+from core.utils import gen_order_id, now_iso
+from services.sheets_service import (
+    append_row,
+    get_all_records,
+    find_row_by_value,
+    update_row,
+)
 
-ORDER_HEADERS = [
-    "order_id",
-    "uid",
-    "confirm_token",   # idempotency key
-    "color",
-    "size",
-    "qty",
-    "price",
-    "total",
-    "name",
-    "phone",
-    "address",
-    "payment_status",  # PENDING / PAID / ...
-    "status",          # NEW / ...
-    "created_at",
-]
 
-def _ensure():
-    ensure_worksheet(WS_ORDER, ORDER_HEADERS)
+# ==========================================================
+# CREATE ORDER
+# ==========================================================
 
-def find_order_by_confirm_token(confirm_token: str) -> Optional[str]:
-    _ensure()
-    confirm_token = str(confirm_token).strip()
-    if not confirm_token:
-        return None
-
-    rows = get_all_records(WS_ORDER)
-    for r in rows:
-        if str(r.get("confirm_token")).strip() == confirm_token:
-            return str(r.get("order_id")).strip() or None
-    return None
-
-def create_order(uid: str, data: Dict[str, Any]) -> str:
+def create_order(uid: str, data: dict) -> str:
     """
-    Idempotent create:
-    - If confirm_token already exists -> return existing order_id
-    - Else create new order row
+    Create new order (simple version)
     """
-    _ensure()
-    confirm_token = str(data.get("confirm_token") or "").strip()
-
-    if confirm_token:
-        existed = find_order_by_confirm_token(confirm_token)
-        if existed:
-            return existed
 
     order_id = gen_order_id()
+
     row = [
-        order_id,
-        uid,
-        confirm_token,
-        data.get("color", ""),
-        data.get("size", ""),
-        str(data.get("qty", "")),
-        str(data.get("price", "")),
-        str(data.get("total", "")),
-        data.get("name", ""),
-        data.get("phone", ""),
-        data.get("address", ""),
-        data.get("payment_status", "PENDING"),
-        "NEW",
-        now_iso(),
+        order_id,                     # order_id
+        uid,                          # uid
+        data.get("confirm_token", ""), # confirm_token
+        data.get("color", ""),         # color
+        data.get("size", ""),          # size
+        data.get("qty", ""),           # qty
+        data.get("price", ""),         # price
+        data.get("total", ""),         # total
+        data.get("name", ""),          # name
+        data.get("phone", ""),         # phone
+        data.get("address", ""),       # address
+        data.get("payment_status", "PENDING"),  # payment_status
+        "NEW",                         # status
+        now_iso(),                     # created_at
     ]
+
     append_row(WS_ORDER, row)
+
     return order_id
+
+
+# ==========================================================
+# FIND ORDER BY ID
+# ==========================================================
+
+def get_order(order_id: str):
+    rows = get_all_records(WS_ORDER)
+
+    for r in rows:
+        if str(r.get("order_id")).strip() == str(order_id).strip():
+            return r
+
+    return None
+
+
+# ==========================================================
+# UPDATE ORDER STATUS
+# ==========================================================
+
+def update_order_status(order_id: str, new_status: str):
+    row_index = find_row_by_value(WS_ORDER, "order_id", order_id)
+    if not row_index:
+        return False
+
+    rows = get_all_records(WS_ORDER)
+    target = None
+
+    for r in rows:
+        if str(r.get("order_id")).strip() == str(order_id).strip():
+            target = r
+            break
+
+    if not target:
+        return False
+
+    updated_row = [
+        target.get("order_id"),
+        target.get("uid"),
+        target.get("confirm_token"),
+        target.get("color"),
+        target.get("size"),
+        target.get("qty"),
+        target.get("price"),
+        target.get("total"),
+        target.get("name"),
+        target.get("phone"),
+        target.get("address"),
+        target.get("payment_status"),
+        new_status,
+        target.get("created_at"),
+    ]
+
+    update_row(WS_ORDER, row_index, updated_row)
+
+    return True
