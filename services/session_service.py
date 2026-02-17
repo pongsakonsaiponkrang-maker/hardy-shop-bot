@@ -1,117 +1,65 @@
-# services/session_service.py
+from __future__ import annotations
+from typing import Any, Dict, Optional
+import time
+
+from core.config import WS_SESSION, SESSION_TTL_SECONDS
+from core.utils import now_iso
+from services.sheets_service import ensure_worksheet, get_all_records, append_row, find_first_row_index, update_cells
+
+SESSION_HEADERS = ["uid", "state", "data_json", "updated_at", "expires_at"]
 
 import json
-import time
-from typing import Dict, Any, Optional
 
-from services.sheets_service import get_sessions_sheet
-from core.config import SESSION_TTL_SECONDS
-from core.utils import safe_int
-
-
-# --------------------------------------------------
-# INTERNAL
-# --------------------------------------------------
-
-def _find_row(uid: str) -> Optional[int]:
-    """
-    Find row number for a user_id in HARDY_SESSION
-    Column A = user_id
-    """
-    sheet = get_sessions_sheet()
-    col = sheet.col_values(1)
-
-    # Skip header (row 1)
-    for idx, value in enumerate(col[1:], start=2):
-        if value.strip() == uid:
-            return idx
-
-    return None
-
-
-# --------------------------------------------------
-# PUBLIC API
-# --------------------------------------------------
+def _ensure():
+    ensure_worksheet(WS_SESSION, SESSION_HEADERS)
 
 def get_session(uid: str) -> Dict[str, Any]:
-    """
-    Return:
-    {
-        "state": str,
-        "data": dict,
-        "updated_at": int
-    }
-    """
+    _ensure()
+    now = int(time.time())
+    rows = get_all_records(WS_SESSION)
 
-    sheet = get_sessions_sheet()
-    row = _find_row(uid)
+    for r in rows:
+        if str(r.get("uid")) == uid:
+            expires_at = int(r.get("expires_at") or 0)
+            if expires_at and now > expires_at:
+                # expired -> treat as empty
+                return {}
+            data_json = r.get("data_json") or "{}"
+            try:
+                data = json.loads(data_json)
+            except Exception:
+                data = {}
+            return {"uid": uid, "state": r.get("state") or "IDLE", "data": data}
+    return {}
 
-    if not row:
-        return {"state": "IDLE", "data": {}, "updated_at": 0}
+def set_session(uid: str, state: str, data: Dict[str, Any]):
+    _ensure()
+    now = int(time.time())
+    expires_at = now + SESSION_TTL_SECONDS
 
-    state = (sheet.cell(row, 2).value or "IDLE").strip()
-    data_json = sheet.cell(row, 3).value or "{}"
-    updated_at = safe_int(sheet.cell(row, 4).value, 0)
-
-    # TTL check
-    if updated_at > 0 and (int(time.time()) - updated_at) > SESSION_TTL_SECONDS:
-        clear_session(uid)
-        return {"state": "IDLE", "data": {}, "updated_at": 0}
-
-    try:
-        data = json.loads(data_json)
-    except Exception:
-        data = {}
-
-    return {
+    row_idx = find_first_row_index(WS_SESSION, "uid", uid)
+    payload = {
+        "uid": uid,
         "state": state,
-        "data": data,
-        "updated_at": updated_at
+        "data_json": json.dumps(data, ensure_ascii=False),
+        "updated_at": now_iso(),
+        "expires_at": str(expires_at),
     }
 
-
-def set_session(uid: str, state: str, data: Dict[str, Any]) -> None:
-    """
-    Save or update session
-    """
-
-    sheet = get_sessions_sheet()
-    row = _find_row(uid)
-
-    payload = json.dumps(data, ensure_ascii=False)
-    now_ts = int(time.time())
-
-    if row:
-        sheet.update(
-            f"A{row}:D{row}",
-            [[uid, state, payload, str(now_ts)]]
-        )
+    if row_idx is None:
+        append_row(WS_SESSION, [payload[h] for h in SESSION_HEADERS])
     else:
-        sheet.append_row([uid, state, payload, str(now_ts)])
+        update_cells(WS_SESSION, row_idx, payload)
 
-
-def clear_session(uid: str) -> None:
-    """
-    Reset session to IDLE
-    """
-
-    sheet = get_sessions_sheet()
-    row = _find_row(uid)
-
-    if not row:
+def clear_session(uid: str):
+    _ensure()
+    row_idx = find_first_row_index(WS_SESSION, "uid", uid)
+    if row_idx is None:
         return
-
-    now_ts = int(time.time())
-
-    sheet.update(
-        f"A{row}:D{row}",
-        [[uid, "IDLE", "{}", str(now_ts)]]
-    )
-
-
-def is_in_state(uid: str, state: str) -> bool:
-    """
-    Helper for checking state quickly
-    """
-    s = get_session(uid)
-    return s["state"] == state
+    # set as idle and expired
+    update_cells(WS_SESSION, row_idx, {
+        "state": "IDLE",
+        "data_json": "{}",
+        "updated_at": now_iso(),
+        "expires_at": "0",
+    })
