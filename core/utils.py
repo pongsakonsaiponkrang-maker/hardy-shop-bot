@@ -1,35 +1,29 @@
-# core/utils.py
-
-import time
+from __future__ import annotations
 from datetime import datetime, timezone, timedelta
-from typing import Any
+import uuid
+import re
 
-APP_TZ = timezone(timedelta(hours=7))
+BKK_TZ = timezone(timedelta(hours=7))
 
+def now_iso() -> str:
+    return datetime.now(tz=BKK_TZ).isoformat(timespec="seconds")
 
-def now_str() -> str:
-    """
-    Current datetime string in Thailand timezone
-    """
-    return datetime.now(APP_TZ).strftime("%Y-%m-%d %H:%M:%S")
+def gen_order_id() -> str:
+    # HD + 10 chars
+    return "HD" + uuid.uuid4().hex[:10].upper()
 
+def gen_token() -> str:
+    return uuid.uuid4().hex
 
-def now_ts() -> int:
-    """
-    Current Unix timestamp
-    """
-    return int(time.time())
-
-
-def safe_int(value: Any, default: int = 0) -> int:
-    """
-    Safe convert to int
-    """
+def safe_int(s: str, default: int = 0) -> int:
     try:
-        return int(str(value).strip())
+        return int(s)
     except Exception:
         return default
 
+def clamp(n: int, lo: int, hi: int) -> int:
+    return max(lo, min(hi, n))
 
-def is_empty(value: Any) -> bool:
-    return value is None or str(value).strip() == ""
+def shorten_label(label: str, max_len: int = 20) -> str:
+    label = re.sub(r"\s+", " ", (label or "").strip())
+    return label[:max_len] if len(label) > max_len else label
