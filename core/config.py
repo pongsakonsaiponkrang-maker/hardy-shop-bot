@@ -35,3 +35,5 @@ WS_ORDER = env("WS_ORDER", "HARDY_ORDER")
 
 # Quick Reply limit (LINE)
 QUICK_REPLY_LIMIT = int(env("QUICK_REPLY_LIMIT", "13"))
+# ADMIN (comma separated)
+ADMIN_USER_IDS = [x.strip() for x in env("ADMIN_USER_IDS", "").split(",") if x.strip()]
