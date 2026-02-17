@@ -1,155 +1,78 @@
-# ==========================================================
-# HARDY - STOCK SERVICE
-# Handles:
-# - Get available colors
-# - Get available sizes per color
-# - Get stock
-# - Get price
-# - Deduct stock safely
-# ==========================================================
+from __future__ import annotations
+from typing import Any, Dict, List, Tuple, Optional
 
-from typing import Dict, List, Tuple, Any
-from services.sheets_service import get_stock_sheet
-from core.utils import safe_int
+from core.config import WS_STOCK, DEFAULT_PRICE_THB
+from services.sheets_service import ensure_worksheet, get_all_records, find_first_row_index, update_cells
 
+STOCK_HEADERS = ["color", "size", "stock", "price"]
 
-# ----------------------------------------------------------
-# Internal helpers
-# ----------------------------------------------------------
+def _ensure():
+    ensure_worksheet(WS_STOCK, STOCK_HEADERS)
 
-def _get_header_map(values: List[List[str]]) -> Dict[str, int]:
-    """
-    Map header name -> column index
-    Expected headers: color, size, stock, price
-    """
-    header = [h.strip().lower() for h in values[0]]
-    return {name: header.index(name) for name in header}
-
-
-def _get_all_rows():
-    sheet = get_stock_sheet()
-    values = sheet.get_all_values()
-    if not values or len(values) < 2:
-        return [], {}
-
-    header_map = _get_header_map(values)
-    rows = values[1:]  # skip header
-    return rows, header_map
-
-
-# ----------------------------------------------------------
-# Public API
-# ----------------------------------------------------------
+def _load() -> List[Dict[str, Any]]:
+    _ensure()
+    rows = get_all_records(WS_STOCK)
+    # normalize
+    out = []
+    for r in rows:
+        color = str(r.get("color") or "").strip()
+        size = str(r.get("size") or "").strip()
+        if not color or not size:
+            continue
+        stock = int(r.get("stock") or 0)
+        price = int(r.get("price") or DEFAULT_PRICE_THB)
+        out.append({"color": color, "size": size, "stock": stock, "price": price})
+    return out
 
 def get_available_colors() -> List[str]:
-    """
-    Return only colors that have stock > 0
-    """
-    rows, header = _get_all_rows()
-    colors = set()
-
-    for row in rows:
-        try:
-            stock = safe_int(row[header["stock"]])
-            if stock > 0:
-                colors.add(row[header["color"]])
-        except Exception:
-            continue
-
-    return sorted(list(colors))
-
+    rows = _load()
+    colors = sorted({r["color"] for r in rows if r["stock"] > 0})
+    return colors
 
 def get_available_sizes(color: str) -> List[str]:
-    """
-    Return sizes with stock > 0 for given color
-    """
-    rows, header = _get_all_rows()
-    sizes = []
-
-    for row in rows:
-        try:
-            if row[header["color"]] != color:
-                continue
-
-            stock = safe_int(row[header["stock"]])
-            if stock > 0:
-                sizes.append(row[header["size"]])
-        except Exception:
-            continue
-
+    color = str(color).strip()
+    rows = _load()
+    sizes = sorted({r["size"] for r in rows if r["color"] == color and r["stock"] > 0})
     return sizes
 
-
 def get_stock(color: str, size: str) -> int:
-    rows, header = _get_all_rows()
-
-    for row in rows:
-        try:
-            if (
-                row[header["color"]] == color and
-                row[header["size"]] == size
-            ):
-                return safe_int(row[header["stock"]])
-        except Exception:
-            continue
-
+    color = str(color).strip()
+    size = str(size).strip()
+    rows = _load()
+    for r in rows:
+        if r["color"] == color and r["size"] == size:
+            return int(r["stock"])
     return 0
-
 
 def get_price(color: str, size: str) -> int:
-    rows, header = _get_all_rows()
-
-    for row in rows:
-        try:
-            if (
-                row[header["color"]] == color and
-                row[header["size"]] == size
-            ):
-                return safe_int(row[header["price"]])
-        except Exception:
-            continue
-
-    return 0
-
+    color = str(color).strip()
+    size = str(size).strip()
+    rows = _load()
+    for r in rows:
+        if r["color"] == color and r["size"] == size:
+            return int(r["price"])
+    return DEFAULT_PRICE_THB
 
 def deduct_stock(color: str, size: str, qty: int) -> Tuple[bool, int]:
     """
-    Safely deduct stock.
-    Return: (success, remaining_stock)
+    Returns (ok, remain)
     """
-    sheet = get_stock_sheet()
-    values = sheet.get_all_values()
+    _ensure()
+    color = str(color).strip()
+    size = str(size).strip()
+    qty = int(qty)
 
-    if not values or len(values) < 2:
-        return False, 0
-
-    header = _get_header_map(values)
-
-    for i in range(1, len(values)):  # start from row 2
-        row = values[i]
-
-        try:
-            if (
-                row[header["color"]] == color and
-                row[header["size"]] == size
-            ):
-                current = safe_int(row[header["stock"]])
-
-                if qty <= 0 or current < qty:
-                    return False, current
-
-                new_stock = current - qty
-
-                # update sheet (row index +1 because sheet index starts at 1)
-                sheet.update_cell(
-                    i + 1,
-                    header["stock"] + 1,
-                    new_stock
-                )
-
-                return True, new_stock
-
-        except Exception:
-            continue
+    # Find row by composite key "color|size" (we do manual scan)
+    rows = get_all_records(WS_STOCK)
+    for idx, r in enumerate(rows, start=2):  # row index in sheet
+        if str(r.get("color")).strip() == color and str(r.get("size")).strip() == size:
+            stock = int(r.get("stock") or 0)
+            if qty <= 0:
+                return False, stock
+            if stock < qty:
+                return False, stock
+            remain = stock - qty
+            update_cells(WS_STOCK, idx, {"stock": str(remain)})
+            return True, remain
 
     return False, 0
