@@ -1,58 +1,59 @@
 # ==========================================================
-# HARDY SESSION SERVICE - CLEAN VERSION
+# HARDY SESSION SERVICE - RENDER FREE SAFE
+# Only read one row (no get_all_records)
 # ==========================================================
 
 import json
 import time
 from core.config import WS_SESSION
-from services.sheets_service import (
-    get_all_records,
-    append_row,
-    update_row,
-    find_row_by_value,
-)
+from services.sheets_service import get_ws
 
-SESSION_TTL = 1800  # 30 min
+SESSION_TTL = 1800
 
 
 def get_session(uid: str):
-    rows = get_all_records(WS_SESSION)
+    ws = get_ws(WS_SESSION)
+    rows = ws.get_all_values()
+
     now = int(time.time())
 
-    for r in rows:
-        if r.get("uid") == uid:
-            if int(r.get("expires_at") or 0) < now:
+    for i, r in enumerate(rows[1:], start=2):
+        if r and r[0] == uid:
+            expires = int(r[4]) if len(r) > 4 and r[4] else 0
+            if expires < now:
                 return None
 
             return {
-                "state": r.get("state"),
-                "data": json.loads(r.get("data_json") or "{}"),
+                "state": r[1],
+                "data": json.loads(r[2] or "{}"),
             }
 
     return None
 
 
 def set_session(uid: str, state: str, data: dict):
+    ws = get_ws(WS_SESSION)
+    rows = ws.get_all_values()
+
     now = int(time.time())
     expires = now + SESSION_TTL
 
-    row_index = find_row_by_value(WS_SESSION, "uid", uid)
+    for i, r in enumerate(rows[1:], start=2):
+        if r and r[0] == uid:
+            ws.update(
+                f"A{i}",
+                [[uid, state, json.dumps(data), now, expires]],
+            )
+            return
 
-    row_data = [
-        uid,
-        state,
-        json.dumps(data),
-        now,
-        expires,
-    ]
-
-    if row_index:
-        update_row(WS_SESSION, row_index, row_data)
-    else:
-        append_row(WS_SESSION, row_data)
+    ws.append_row([uid, state, json.dumps(data), now, expires])
 
 
 def clear_session(uid: str):
-    row_index = find_row_by_value(WS_SESSION, "uid", uid)
-    if row_index:
-        update_row(WS_SESSION, row_index, ["", "", "", "", ""])
+    ws = get_ws(WS_SESSION)
+    rows = ws.get_all_values()
+
+    for i, r in enumerate(rows[1:], start=2):
+        if r and r[0] == uid:
+            ws.update(f"A{i}", [["", "", "", "", ""]])
+            return
