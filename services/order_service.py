@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 
 from core.config import WS_ORDER
 from core.utils import now_iso, gen_order_id
-from services.sheets_service import ensure_worksheet, get_all_records, append_row, find_first_row_index
+from services.sheets_service import ensure_worksheet, get_all_records, append_row
 
 ORDER_HEADERS = [
     "order_id",
@@ -14,7 +14,11 @@ ORDER_HEADERS = [
     "qty",
     "price",
     "total",
-    "status",
+    "name",
+    "phone",
+    "address",
+    "payment_status",  # PENDING / PAID / ...
+    "status",          # NEW / ...
     "created_at",
 ]
 
@@ -57,6 +61,10 @@ def create_order(uid: str, data: Dict[str, Any]) -> str:
         str(data.get("qty", "")),
         str(data.get("price", "")),
         str(data.get("total", "")),
+        data.get("name", ""),
+        data.get("phone", ""),
+        data.get("address", ""),
+        data.get("payment_status", "PENDING"),
         "NEW",
         now_iso(),
     ]
