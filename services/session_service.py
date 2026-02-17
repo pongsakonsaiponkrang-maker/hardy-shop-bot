@@ -1,65 +1,58 @@
-from __future__ import annotations
-from typing import Any, Dict, Optional
-import time
-
-from core.config import WS_SESSION, SESSION_TTL_SECONDS
-from core.utils import now_iso
-from services.sheets_service import ensure_worksheet, get_all_records, append_row, find_first_row_index, update_cells
-
-SESSION_HEADERS = ["uid", "state", "data_json", "updated_at", "expires_at"]
+# ==========================================================
+# HARDY SESSION SERVICE - CLEAN VERSION
+# ==========================================================
 
 import json
+import time
+from core.config import WS_SESSION
+from services.sheets_service import (
+    get_all_records,
+    append_row,
+    update_row,
+    find_row_by_value,
+)
 
-def _ensure():
-    ensure_worksheet(WS_SESSION, SESSION_HEADERS)
+SESSION_TTL = 1800  # 30 min
 
-def get_session(uid: str) -> Dict[str, Any]:
-    _ensure()
-    now = int(time.time())
+
+def get_session(uid: str):
     rows = get_all_records(WS_SESSION)
+    now = int(time.time())
 
     for r in rows:
-        if str(r.get("uid")) == uid:
-            expires_at = int(r.get("expires_at") or 0)
-            if expires_at and now > expires_at:
-                # expired -> treat as empty
-                return {}
-            data_json = r.get("data_json") or "{}"
-            try:
-                data = json.loads(data_json)
-            except Exception:
-                data = {}
-            return {"uid": uid, "state": r.get("state") or "IDLE", "data": data}
-    return {}
+        if r.get("uid") == uid:
+            if int(r.get("expires_at") or 0) < now:
+                return None
 
-def set_session(uid: str, state: str, data: Dict[str, Any]):
-    _ensure()
+            return {
+                "state": r.get("state"),
+                "data": json.loads(r.get("data_json") or "{}"),
+            }
+
+    return None
+
+
+def set_session(uid: str, state: str, data: dict):
     now = int(time.time())
-    expires_at = now + SESSION_TTL_SECONDS
+    expires = now + SESSION_TTL
 
-    row_idx = find_first_row_index(WS_SESSION, "uid", uid)
-    payload = {
-        "uid": uid,
-        "state": state,
-        "data_json": json.dumps(data, ensure_ascii=False),
-        "updated_at": now_iso(),
-        "expires_at": str(expires_at),
-    }
+    row_index = find_row_by_value(WS_SESSION, "uid", uid)
 
-    if row_idx is None:
-        append_row(WS_SESSION, [payload[h] for h in SESSION_HEADERS])
+    row_data = [
+        uid,
+        state,
+        json.dumps(data),
+        now,
+        expires,
+    ]
+
+    if row_index:
+        update_row(WS_SESSION, row_index, row_data)
     else:
-        update_cells(WS_SESSION, row_idx, payload)
+        append_row(WS_SESSION, row_data)
+
 
 def clear_session(uid: str):
-    _ensure()
-    row_idx = find_first_row_index(WS_SESSION, "uid", uid)
-    if row_idx is None:
-        return
-    # set as idle and expired
-    update_cells(WS_SESSION, row_idx, {
-        "state": "IDLE",
-        "data_json": "{}",
-        "updated_at": now_iso(),
-        "expires_at": "0",
-    })
+    row_index = find_row_by_value(WS_SESSION, "uid", uid)
+    if row_index:
+        update_row(WS_SESSION, row_index, ["", "", "", "", ""])
